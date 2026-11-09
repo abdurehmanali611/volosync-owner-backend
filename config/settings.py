@@ -107,7 +107,7 @@ CORS_ALLOW_ALL_ORIGINS = DEBUG
 CORS_ALLOWED_ORIGINS = config(
     "CORS_ALLOWED_ORIGINS",
     cast=Csv(),
-    default="http://localhost:3000,http://127.0.0.1:3000",
+    default="http://localhost:8081,http://127.0.0.1:8081",
 )
 
 VAT_RATE_DEFAULT = "15.00"
