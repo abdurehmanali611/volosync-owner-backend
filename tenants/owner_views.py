@@ -247,7 +247,9 @@ def eligible_branches(root):
         if member.is_illustration and not member.is_main:
             continue
         fee = member.annual_fee or MONEY
-        if fee <= 0:
+        # Always allow the main branch (company root) to be paid even if fee is 0
+        # The fee can be set during payment if not yet configured
+        if fee <= 0 and not member.is_main:
             continue
         rows.append(
             {
