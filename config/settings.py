@@ -104,10 +104,5 @@ SIMPLE_JWT = {
 }
 
 CORS_ALLOW_ALL_ORIGINS = DEBUG
-CORS_ALLOWED_ORIGINS = config(
-    "CORS_ALLOWED_ORIGINS",
-    cast=Csv(),
-    default="*",
-)
 
 VAT_RATE_DEFAULT = "15.00"

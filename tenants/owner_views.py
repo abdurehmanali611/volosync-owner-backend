@@ -395,7 +395,7 @@ class OwnerSessionView(APIView):
                 {"errors": {"message": "This owner is not attached to a company."}},
                 status=400,
             )
-        branches = Tenant.objects.filter(parent=root)
+        branches = Tenant.objects.filter(Q(pk=root.id) | Q(parent=root))
         return Response(
             {
                 "data": {
@@ -480,6 +480,25 @@ class OwnerReportsView(APIView):
         )
         revenue = totals["revenue"] or MONEY
         vat_collected = revenue * vat_share
+
+        # Profit is cost against selling price for the units actually sold:
+        # the lot carries the purchase cost, the assignment the selling price.
+        sold_rows = approved.values_list(
+            "sold_quantity",
+            "assignment__lot__unit_cost",
+            "assignment__unit_sales_at_assignment",
+        )
+        sold_units = Decimal("0")
+        cost_of_sold = Decimal("0")
+        selling_of_sold = Decimal("0")
+        for quantity, unit_cost, unit_sales in sold_rows:
+            quantity = quantity or Decimal("0")
+            sold_units += quantity
+            cost_of_sold += quantity * (unit_cost or Decimal("0"))
+            selling_of_sold += quantity * (unit_sales or Decimal("0"))
+        gross_profit = selling_of_sold - cost_of_sold
+        average_cost = cost_of_sold / sold_units if sold_units else Decimal("0")
+        average_selling = selling_of_sold / sold_units if sold_units else Decimal("0")
 
         movement_window = windowed(
             StockMovement.objects.filter(tenant_id__in=ids), start, end, field="at"
@@ -653,6 +672,16 @@ class OwnerReportsView(APIView):
                 "new_lots": new_lots,
                 "issued_in_period": str(issued),
                 "returned_in_period": str(returned),
+                "cost_of_sold": money(cost_of_sold),
+                "selling_of_sold": money(selling_of_sold),
+                "gross_profit": money(gross_profit),
+                "profit_margin": str(
+                    (gross_profit / selling_of_sold * 100).quantize(Decimal("0.01"))
+                    if selling_of_sold
+                    else Decimal("0")
+                ),
+                "average_unit_cost": money(average_cost),
+                "average_unit_selling": money(average_selling),
             },
             "pipeline": {
                 "pending_finance": all_settlements.filter(status="PENDING_FINANCE").count(),
@@ -670,7 +699,7 @@ class OwnerReportsView(APIView):
             "agents": agents,
             "top_items": top_items[:8],
             "trend": trend,
-            "branches": [row for row in comparison if row["is_branch"] or row["is_main"]],
+            "branches": [row for row in comparison if row["is_branch"] or row["is_main"] or row["is_root"]],
             "main_branch": main_row,
         }
         return Response({"data": data})
@@ -689,7 +718,7 @@ class BranchListView(APIView):
                 status=400,
             )
         rows = [branch_row(member, root) for member in tree(root)]
-        branches = [row for row in rows if row["is_branch"] or row["is_main"]]
+        branches = [row for row in rows if row["is_branch"] or row["is_main"] or row["is_root"]]
         requests = BranchRequest.objects.filter(parent=root).select_related(
             "created_branch", "decided_by"
         )[:50]
