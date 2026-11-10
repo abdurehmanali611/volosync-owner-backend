@@ -483,19 +483,21 @@ class OwnerReportsView(APIView):
 
         # Profit is cost against selling price for the units actually sold:
         # the lot carries the purchase cost, the assignment the selling price.
+        # Selling price = unit_sales_at_assignment + changing_amount (matches volosync backend)
         sold_rows = approved.values_list(
             "sold_quantity",
             "assignment__lot__unit_cost",
             "assignment__unit_sales_at_assignment",
+            "assignment__changing_amount",
         )
         sold_units = Decimal("0")
         cost_of_sold = Decimal("0")
         selling_of_sold = Decimal("0")
-        for quantity, unit_cost, unit_sales in sold_rows:
+        for quantity, unit_cost, unit_sales, changing_amount in sold_rows:
             quantity = quantity or Decimal("0")
             sold_units += quantity
             cost_of_sold += quantity * (unit_cost or Decimal("0"))
-            selling_of_sold += quantity * (unit_sales or Decimal("0"))
+            selling_of_sold += quantity * ((unit_sales or Decimal("0")) + (changing_amount or Decimal("0")))
         gross_profit = selling_of_sold - cost_of_sold
         average_cost = cost_of_sold / sold_units if sold_units else Decimal("0")
         average_selling = selling_of_sold / sold_units if sold_units else Decimal("0")
