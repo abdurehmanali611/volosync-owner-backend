@@ -350,8 +350,12 @@ def branch_row(tenant, root):
     totals = approved.aggregate(
         revenue=Sum("sales_amount"),
         units=Sum("sold_quantity"),
+        returned=Sum("returned_quantity"),
         penalty_amount=Sum("penalty_amount"),
     )
+    revenue = totals["revenue"] or MONEY
+    penalty_total = totals["penalty_amount"] or MONEY
+    collected_gross = revenue - penalty_total
     return {
         **TenantSerializer(tenant).data,
         "is_branch": tenant.parent_id is not None,
@@ -372,8 +376,9 @@ def branch_row(tenant, root):
         "lots": lots.count(),
         "stock_value": money(lots.aggregate(v=Sum(F("remaining_quantity") * F("unit_cost")))["v"]),
         "registered_value": money(lots.aggregate(v=Sum(F("quantity") * F("unit_cost")))["v"]),
-        "revenue": money(totals["revenue"]),
+        "revenue": money(collected_gross),
         "units_sold": str(totals["units"] or Decimal("0")),
+        "returned_units": str(totals["returned"] or Decimal("0")),
         "settlements": approved.count(),
         "pending": SalesSettlement.objects.filter(
             tenant=tenant, status__in=("PENDING_FINANCE", "PENDING_MANAGER")
@@ -479,7 +484,10 @@ class OwnerReportsView(APIView):
             penalty_amount=Sum("penalty_amount"),
         )
         revenue = totals["revenue"] or MONEY
-        vat_collected = revenue * vat_share
+        expected_gross = totals["expected"] or MONEY
+        penalty_total = totals["penalty_amount"] or MONEY
+        collected_gross = revenue - penalty_total
+        vat_collected = collected_gross * vat_share
 
         # Profit is cost against selling price for the units actually sold:
         # the lot carries the purchase cost, the assignment the selling price.
@@ -579,7 +587,7 @@ class OwnerReportsView(APIView):
                     "penalty_amount": money(Decimal("0")),
                 }
             )
-        agents.sort(key=lambda row: (-Decimal(row["revenue"]), -Decimal(row["units"]), row["name"]))
+        agents.sort(key=lambda row: (-Decimal(row["revenue"]), -Decimal(row["units"]), Decimal(row["penalty_amount"])))
         for index, agent in enumerate(agents, start=1):
             agent["rank"] = index
 
@@ -633,9 +641,7 @@ class OwnerReportsView(APIView):
         issued = movement_window.filter(type="STOCKOUT").aggregate(
             v=Sum(F("quantity_delta") * -1)
         )["v"] or Decimal("0")
-        returned = movement_window.filter(type="SALE_RETURN").aggregate(
-            v=Sum("quantity_delta")
-        )["v"] or Decimal("0")
+        returned = approved.aggregate(v=Sum("returned_quantity"))["v"] or Decimal("0")
 
         data = {
             "tenant": TenantSerializer(root).data,
@@ -664,8 +670,10 @@ class OwnerReportsView(APIView):
                 "in_store_units": str(remaining_units),
                 "stocked_out_units": str(registered_units - remaining_units),
                 "vat_on_stock": money(vat_on_stock),
-                "revenue": money(revenue),
+                "revenue": money(collected_gross),
+                "expected_gross": money(expected_gross),
                 "units_sold": str(totals["units"] or Decimal("0")),
+                "returned_units": str(totals["returned"] or Decimal("0")),
                 "vat_collected": money(vat_collected),
                 "penalties": approved.filter(penalty=True).count(),
                 "penalty_amount": money(totals["penalty_amount"]),
@@ -689,8 +697,8 @@ class OwnerReportsView(APIView):
                 "pending_finance": all_settlements.filter(status="PENDING_FINANCE").count(),
                 "pending_manager": all_settlements.filter(status="PENDING_MANAGER").count(),
                 "rejected": all_settlements.filter(status="REJECTED").count(),
-                "expected_amount": money(totals["expected"]),
-                "variance": money(revenue - (totals["expected"] or Decimal("0"))),
+                "expected_amount": money(expected_gross),
+                "variance": money(collected_gross - expected_gross),
             },
             "payment_methods": payment_methods,
             "promotions": {
