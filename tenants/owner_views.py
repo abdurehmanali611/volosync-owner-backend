@@ -465,10 +465,6 @@ class OwnerReportsView(APIView):
         registered_units = lots.aggregate(v=Sum("quantity"))["v"] or Decimal("0")
         remaining_units = lots.aggregate(v=Sum("remaining_quantity"))["v"] or Decimal("0")
         new_lots = dated(lots, start, end, "registration_date").count()
-        # Every price is entered VAT-inclusive, so VAT is read out of the amount.
-        inclusive_rate = root.vat_rate or Decimal("0")
-        vat_share = inclusive_rate / (100 + inclusive_rate)
-        vat_on_stock = in_store * vat_share
 
         approved = windowed(
             SalesSettlement.objects.filter(tenant_id__in=ids, status="APPROVED"),
@@ -486,9 +482,19 @@ class OwnerReportsView(APIView):
         expected_gross = totals["expected"] or MONEY
         penalty_total = totals["penalty_amount"] or MONEY
         collected_gross = revenue - penalty_total
-        vat_collected = collected_gross * vat_share
 
-        # Profit is cost against selling price for the units actually sold:
+        # VAT collected: sum of VAT from each settlement using its lot's vat_rate
+        # (matches volosync backend: sales_amount * vat_rate / (100 + vat_rate) per settlement)
+        vat_collected = Decimal("0")
+        for settlement in approved.values("sales_amount", "assignment__lot__vat_rate"):
+            amt = settlement["sales_amount"] or Decimal("0")
+            rate = settlement["assignment__lot__vat_rate"] or Decimal("0")
+            vat_collected += amt * rate / (Decimal("100") + rate)
+
+        # VAT on stock: use root vat_rate for inventory valuation
+        inclusive_rate = root.vat_rate or Decimal("0")
+        vat_share = inclusive_rate / (Decimal("100") + inclusive_rate)
+        vat_on_stock = in_store * vat_share
         # the lot carries the purchase cost, the assignment the selling price.
         # Selling price = unit_sales_at_assignment + changing_amount (matches volosync backend)
         sold_rows = approved.values_list(
