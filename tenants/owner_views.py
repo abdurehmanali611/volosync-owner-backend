@@ -550,7 +550,8 @@ class OwnerReportsView(APIView):
 
         agents = []
         agent_rows = approved.filter(
-            assignment__isnull=False
+            assignment__isnull=False,
+            assignment__sales_agent__isnull=False,
         ).values(
             "assignment__sales_agent_id",
             "assignment__sales_agent__first_name",
