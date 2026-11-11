@@ -577,7 +577,7 @@ class OwnerReportsView(APIView):
                 }
             )
         # Agents with no activity in the window still belong to the leaderboard.
-        quiet = SalesAgent.objects.filter(tenant_id__in=ids).exclude(
+        quiet = SalesAgent.objects.filter(tenant_id__in=ids, is_active=True).exclude(
             id__in=[agent["id"] for agent in agents]
         )
         for agent in quiet:
