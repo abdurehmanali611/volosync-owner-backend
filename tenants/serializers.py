@@ -18,6 +18,7 @@ class TenantSerializer(serializers.ModelSerializer):
             "sales_role_enabled",
             "parent",
             "is_main",
+            "is_illustration",
             "subscription_expires_on",
             "subscription_transaction_id",
             "subscription_paid_on",
