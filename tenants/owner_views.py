@@ -234,22 +234,19 @@ def manager_of(tenant):
 
 
 def eligible_branches(root):
-    """Branches the owner may pay for.
+    """Every branch in the family the owner may renew.
 
-    Main + satellites with a real yearly fee; billing holds and zero-fee
-    branches are excluded, and illustration accounts are skipped unless
-    they are the main branch.
+    There is no company root: the record created with the tenant is simply the
+    first branch, and may be main or satellite. Main and satellite branches are
+    treated exactly alike — a billing hold or a missing yearly fee is the only
+    reason to leave one out.
     """
     rows = []
     for member in tree(root):
         if member.billing_hold:
             continue
-        if member.is_illustration and not member.is_main:
-            continue
         fee = member.annual_fee or MONEY
-        # Always allow the main branch (company root) to be paid even if fee is 0
-        # The fee can be set during payment if not yet configured
-        if fee <= 0 and not member.is_main:
+        if fee <= 0:
             continue
         rows.append(
             {
@@ -675,7 +672,7 @@ class OwnerReportsView(APIView):
                 "revenue": money(collected_gross),
                 "expected_gross": money(expected_gross),
                 "units_sold": str(totals["units"] or Decimal("0")),
-                "returned_units": str(totals["returned"] or Decimal("0")),
+                "returned_units": str(returned or Decimal("0")),
                 "vat_collected": money(vat_collected),
                 "penalties": approved.filter(penalty=True).count(),
                 "penalty_amount": money(totals["penalty_amount"]),
@@ -711,7 +708,7 @@ class OwnerReportsView(APIView):
             "agents": agents,
             "top_items": top_items[:8],
             "trend": trend,
-            "branches": [row for row in comparison if row["is_branch"] or row["is_main"] or row["is_root"]],
+            "branches": comparison,
             "main_branch": main_row,
         }
         return Response({"data": data})
@@ -730,7 +727,7 @@ class BranchListView(APIView):
                 status=400,
             )
         rows = [branch_row(member, root) for member in tree(root)]
-        branches = [row for row in rows if row["is_branch"] or row["is_main"] or row["is_root"]]
+        branches = rows
         requests = BranchRequest.objects.filter(parent=root).select_related(
             "created_branch", "decided_by"
         )[:50]
@@ -893,7 +890,14 @@ class BranchDetailView(APIView):
         root = owner_company(request.user)
         if root is None:
             return None, None
-        branch = Tenant.objects.filter(pk=pk, parent=root).select_related("parent").first()
+        # Every member of the family is a branch, including the record created
+        # with the tenant, so any of them can be edited or promoted.
+        branch = (
+            Tenant.objects.filter(pk=pk)
+            .filter(Q(pk=root.pk) | Q(parent=root))
+            .select_related("parent")
+            .first()
+        )
         return root, branch
 
     def patch(self, request, pk):
@@ -922,8 +926,6 @@ class BranchDetailView(APIView):
             tin = tin.strip()
             if not tin:
                 errors["tin"] = "Every branch runs on its own TIN."
-            elif tin == root.tin:
-                errors["tin"] = "That is the company TIN."
             elif Tenant.objects.filter(tin__iexact=tin).exclude(pk=branch.pk).exists():
                 errors["tin"] = "That TIN is already registered."
 
@@ -963,6 +965,18 @@ class BranchDetailView(APIView):
 
         lots = StockLot.objects.filter(tenant=branch).count()
         settlements = SalesSettlement.objects.filter(tenant=branch).count()
+        if branch.branches.exists():
+            return Response(
+                {
+                    "errors": {
+                        "message": (
+                            f"{branch.name} is the branch this company's family starts "
+                            "from. It cannot be removed while other branches belong to it."
+                        )
+                    }
+                },
+                status=400,
+            )
         if lots or settlements:
             return Response(
                 {
@@ -1002,7 +1016,11 @@ class BranchManagerPasswordView(APIView):
     def post(self, request, pk):
         root = owner_company(request.user)
         branch = (
-            Tenant.objects.filter(pk=pk, parent=root).first() if root else None
+            Tenant.objects.filter(pk=pk)
+            .filter(Q(pk=root.pk) | Q(parent=root))
+            .first()
+            if root
+            else None
         )
         if branch is None:
             return Response({"errors": {"message": "Not found."}}, status=404)
